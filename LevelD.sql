@@ -1,3 +1,22 @@
+/*
+==========================================
+Project: Open Elective Subject Allocation System
+Author: Shaswat Patel
+Description:
+    This SQL script contains logic for allocating Open Elective Subjects to students
+    based on their preferences and GPA. Additionally, it handles subject change
+    requests while preserving subject history.
+
+Phase 1: Subject Allocation
+---------------------------
+- Each student can select 5 subject preferences.
+- Students are allotted subjects based on their GPA (highest first).
+- If a student's higher preference is full, the next one is considered.
+- Final allotments are stored in the "Allotments" table.
+- Students who do not get any subjects are stored in "UnallotedStudents".
+*/
+
+
 Create Database College
 GO
 
