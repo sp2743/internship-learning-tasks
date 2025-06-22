@@ -1,40 +1,59 @@
 /*
-==========================================
-Project: Open Elective Subject Allocation System
-Author: Shaswat Patel
-Description:
-    This SQL script contains logic for allocating Open Elective Subjects to students
-    based on their preferences and GPA. Additionally, it handles subject change
-    requests while preserving subject history.
+===========================================
+Procedure: AllocateSubjectToStudents
+Author: Shaswat
+Purpose:
+    Allocates elective subjects to students 
+    based on their GPA and subject preference.
 
-Phase 1: Subject Allocation
----------------------------
-- Each student can select 5 subject preferences.
-- Students are allotted subjects based on their GPA (highest first).
-- If a student's higher preference is full, the next one is considered.
-- Final allotments are stored in the "Allotments" table.
-- Students who do not get any subjects are stored in "UnallotedStudents".
+Logic Overview:
+    1. Reset existing allocations and subject seat counts.
+    2. Iterate over all students in descending order of GPA.
+    3. For each student:
+        a. Try their preferences from 1 to 5.
+        b. For each preference, check if the subject has available seats.
+        c. If seats are available:
+            - Allocate the subject to the student.
+            - Immediately decrement RemainingSeats by 1.
+            - Stop checking further preferences for that student.
+        d. If no preferred subjects have seats:
+            - Add the student to UnallotedStudents table.
+    4. Ensures:
+        - One student gets only one subject.
+        - No subject is over-allocated.
+        - Higher GPA students get priority.
+
+Key Features:
+    - Accurate, row-by-row processing using CURSOR.
+    - Immediate seat updates prevent over-allocation.
+    - Clean reset before each execution for testing or re-running.
+===========================================
 */
+
 
 
 Create Database College
 GO
 
--- Students
 CREATE TABLE StudentDetails (
     StudentId INT PRIMARY KEY,
     StudentName VARCHAR(100),
     GPA FLOAT
 );
 
--- Subjects
+------------------------------------------------------------
+-- SUBJECT TABLE with MaxSeats and RemainingSeats
+------------------------------------------------------------
 CREATE TABLE SubjectDetails (
     SubjectId VARCHAR(10) PRIMARY KEY,
     SubjectName VARCHAR(100),
+    MaxSeats INT,
     RemainingSeats INT
 );
 
--- Student Preference
+------------------------------------------------------------
+-- STUDENT PREFERENCES TABLE
+------------------------------------------------------------
 CREATE TABLE StudentPreference (
     StudentId INT,
     SubjectId VARCHAR(10),
@@ -44,7 +63,9 @@ CREATE TABLE StudentPreference (
     FOREIGN KEY (SubjectId) REFERENCES SubjectDetails(SubjectId)
 );
 
--- allotment
+------------------------------------------------------------
+-- ALLOTMENT RESULT TABLE
+------------------------------------------------------------
 CREATE TABLE Allotments (
     StudentId INT PRIMARY KEY,
     SubjectId VARCHAR(10),
@@ -52,13 +73,17 @@ CREATE TABLE Allotments (
     FOREIGN KEY (SubjectId) REFERENCES SubjectDetails(SubjectId)
 );
 
--- unalloted student
+------------------------------------------------------------
+-- UNALLOTTED STUDENTS TABLE
+------------------------------------------------------------
 CREATE TABLE UnallotedStudents (
     StudentId INT PRIMARY KEY,
     FOREIGN KEY (StudentId) REFERENCES StudentDetails(StudentId)
 );
 
--- Insert sample data
+------------------------------------------------------------
+-- INSERT SAMPLE STUDENT DATA
+------------------------------------------------------------
 INSERT INTO StudentDetails (StudentId, StudentName, GPA) VALUES
 (1, 'Alice', 9.5), (2, 'Bob', 8.7), (3, 'Charlie', 9.8), (4, 'David', 7.9),
 (5, 'Eva', 9.1), (6, 'Frank', 8.5), (7, 'Grace', 8.0), (8, 'Hank', 7.5),
@@ -66,12 +91,17 @@ INSERT INTO StudentDetails (StudentId, StudentName, GPA) VALUES
 (13, 'Mia', 9.6), (14, 'Noah', 7.7), (15, 'Olivia', 8.2), (16, 'Paul', 8.3),
 (17, 'Quinn', 7.6), (18, 'Rose', 9.4), (19, 'Sam', 7.4), (20, 'Tina', 8.8);
 
-INSERT INTO SubjectDetails (SubjectId, SubjectName, RemainingSeats) VALUES
-('S1', 'Mathematics', 5),
-('S2', 'Physics', 7),
-('S3', 'Chemistry', 6);
+------------------------------------------------------------
+-- INSERT SUBJECT DATA (MaxSeats & RemainingSeats)
+------------------------------------------------------------
+INSERT INTO SubjectDetails (SubjectId, SubjectName, MaxSeats, RemainingSeats) VALUES
+('S1', 'Mathematics', 5, 5),
+('S2', 'Physics', 7, 7),
+('S3', 'Chemistry', 6, 6);
 
-
+------------------------------------------------------------
+-- INSERT STUDENT PREFERENCES
+------------------------------------------------------------
 INSERT INTO StudentPreference VALUES
 (1, 'S1', 1), (1, 'S2', 2), (1, 'S3', 3), (1, 'S1', 4), (1, 'S2', 5),
 (2, 'S2', 1), (2, 'S3', 2), (2, 'S1', 3), (2, 'S2', 4), (2, 'S3', 5),
@@ -94,8 +124,10 @@ INSERT INTO StudentPreference VALUES
 (19, 'S2', 1), (19, 'S1', 2), (19, 'S3', 3), (19, 'S2', 4), (19, 'S1', 5),
 (20, 'S3', 1), (20, 'S1', 2), (20, 'S2', 3), (20, 'S3', 4), (20, 'S2', 5);
 
+
 SELECT * FROM StudentDetails;
 
+-- based on gpa and remaining seat it would assign a subject to student based on preference.
 SELECT sp.SubjectId, sp.StudentId
 FROM StudentPreference sp
 INNER JOIN StudentDetails s ON sp.StudentId = s.StudentId
@@ -110,61 +142,83 @@ AND NOT EXISTS (                -- Avoid duplicate entries
                )
 ORDER BY s.GPA DESC;
 
-
--- Creating a stored procedure to allocate the seat to the student based on the preference and remaining seat.
-GO 
-CREATE PROCEDURE AllocateSubjectToStudents 
+GO
+CREATE OR ALTER PROCEDURE AllocateSubjectToStudents
 AS
 BEGIN
     SET NOCOUNT ON;
-    DECLARE @pref INT =1;
 
-    WHILE @pref<=5
+    -- Step 1: Cursor to fetch students ordered by GPA DESC
+    DECLARE @StudentId INT, @Pref INT = 1, @SubjectId VARCHAR(10), @Seats INT;
+
+    DECLARE student_cursor CURSOR FOR
+    SELECT StudentId
+    FROM StudentDetails
+    ORDER BY GPA DESC;
+
+    OPEN student_cursor;
+    FETCH NEXT FROM student_cursor INTO @StudentId;
+
+    WHILE @@FETCH_STATUS = 0
     BEGIN
-        INSERT INTO Allotments (SubjectId,StudentId)
-        SELECT sp.SubjectId, sp.StudentId
-        FROM StudentPreference sp
-        INNER JOIN StudentDetails s ON sp.StudentId = s.StudentId
-        INNER JOIN SubjectDetails sd ON sp.SubjectId = sd.SubjectId
-        LEFT JOIN Allotments a ON a.StudentId = sp.StudentId
-        WHERE sp.Preference = @pref
-          AND a.StudentId IS NULL         -- Student not yet allotted
-          AND sd.RemainingSeats > 0
-          AND NOT EXISTS (                -- Avoid duplicate entries
-              SELECT 1 FROM Allotments x
-              WHERE x.StudentId = sp.StudentId
-          )
-        ORDER BY s.GPA DESC;
+        SET @Pref = 1;
+        DECLARE @Allocated BIT = 0;
 
-        UPDATE sd
-        SET sd.RemainingSeats = sd.RemainingSeats - x.AllocCount
-        FROM SubjectDetails sd
-        INNER JOIN (
-            SELECT SubjectId, COUNT(*) AS AllocCount
-            FROM Allotments
-            WHERE StudentId IN (
-                SELECT sp.StudentId
-                FROM StudentPreference sp
-                WHERE sp.Preference = @pref
-            )
-            GROUP BY SubjectId
-        ) x ON sd.SubjectId = x.SubjectId;
+        WHILE @Pref <= 5 AND @Allocated = 0
+        BEGIN
+            SELECT @SubjectId = SubjectId
+            FROM StudentPreference
+            WHERE StudentId = @StudentId AND Preference = @Pref;
 
-        SET @pref = @pref + 1;
+            SELECT @Seats = RemainingSeats
+            FROM SubjectDetails
+            WHERE SubjectId = @SubjectId;
+
+            IF @Seats IS NOT NULL AND @Seats > 0
+            BEGIN
+                -- Allocate student
+                INSERT INTO Allotments (StudentId, SubjectId)
+                VALUES (@StudentId, @SubjectId);
+
+                -- Decrease seat count
+                UPDATE SubjectDetails
+                SET RemainingSeats = RemainingSeats - 1
+                WHERE SubjectId = @SubjectId;
+
+                SET @Allocated = 1;
+            END
+            ELSE
+            BEGIN
+                SET @Pref = @Pref + 1;
+            END
+        END
+
+        IF @Allocated = 0
+        BEGIN
+            -- Student could not be allotted
+            INSERT INTO UnallotedStudents (StudentId)
+            VALUES (@StudentId);
+        END
+
+        FETCH NEXT FROM student_cursor INTO @StudentId;
     END
 
-    INSERT INTO UnallotedStudents (StudentId)
-    SELECT s.StudentId
-    FROM StudentDetails s
-    LEFT JOIN Allotments a ON s.StudentId = a.StudentId
-    WHERE a.StudentId IS NULL;
-
+    CLOSE student_cursor;
+    DEALLOCATE student_cursor;
 END;
+
+
+-- TRUNCATE TABLE Allotments;
+-- TRUNCATE TABLE UnallotedStudents;
+
 
 EXEC AllocateSubjectToStudents;
 
 -- show the result in allotments table and unallotedStudents table
 SELECT * FROM Allotments;
+SELECT * FROM SubjectDetails;
 SELECT * FROM UnallotedStudents;
+
+
 
 
